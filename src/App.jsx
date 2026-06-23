@@ -252,6 +252,19 @@ function priceActionPatterns(candles) {
   if (isBull(c2) && body(c1) < rng(c1) * 0.3 && isBear(c0) && c0.close < (c2.open + c2.close) / 2)
     pats.push({ name: "Evening Star", side: "bear", strength: 3 });
 
+  // Conflict resolution — remove contradictory patterns
+  const hasBull = pats.some(p => p.side === "bull" && p.strength >= 2);
+  const hasBear = pats.some(p => p.side === "bear" && p.strength >= 2);
+  // If strong bull AND strong bear patterns both detected, keep only stronger side
+  if (hasBull && hasBear) {
+    const bullStr = pats.filter(p => p.side === "bull").reduce((a, p) => a + p.strength, 0);
+    const bearStr = pats.filter(p => p.side === "bear").reduce((a, p) => a + p.strength, 0);
+    if (bullStr > bearStr) return pats.filter(p => p.side !== "bear" || p.strength < 2);
+    if (bearStr > bullStr) return pats.filter(p => p.side !== "bull" || p.strength < 2);
+  }
+  // Remove Doji if strong directional pattern also detected
+  const hasStrong = pats.some(p => p.strength >= 3);
+  if (hasStrong) return pats.filter(p => p.name !== "Doji — Indecision" && p.name !== "Inside Bar");
   return pats;
 }
 
@@ -259,7 +272,9 @@ function priceActionPatterns(candles) {
 function buildSignal(market, candles, htfCandles, livePrice) {
   const { symbol, isJPY = false, isGold = false } = market;
   const isSyn = SYNTHETICS.some(s => s.symbol === symbol);
-  const dec   = isGold ? 2 : isJPY ? 3 : isSyn ? 3 : 5;
+  // Dynamic decimals: high-price synthetics (Jump 10 ~98k, Boom/Crash ~6k+) use 2dp
+  const lastClose = candles.length ? candles[candles.length-1].close : 0;
+  const dec = isGold ? 2 : isJPY ? 3 : isSyn ? (lastClose > 999 ? 2 : 3) : 5;
 
   const closes = candles.map(c => c.close);
   const price  = livePrice ?? closes[closes.length - 1];
@@ -360,13 +375,16 @@ function buildSignal(market, candles, htfCandles, livePrice) {
   const bearConf = Math.min(100, Math.round((bear / MAX) * 100));
   const trend    = ema9 > ema21 ? "UP" : ema9 < ema21 ? "DOWN" : "FLAT";
 
-  const minScore  = 9;
-  const minMargin = 2;
+  const minScore  = 10;
+  const minMargin = 3;
 
   let signal, confidence, tp1, tp2, sl;
 
-  const bullValid = volOk && bull >= minScore && bull > bear + minMargin && htfConfirms("bull");
-  const bearValid = volOk && bear >= minScore && bear > bull + minMargin && htfConfirms("bear");
+  // Extra filter: MACD must not strongly contradict the signal
+  const macdOkBull = macdH >= 0 || bull - bear >= 5; // allow bearish MACD only if score dominance is high
+  const macdOkBear = macdH <= 0 || bear - bull >= 5;
+  const bullValid = volOk && bull >= minScore && bull > bear + minMargin && htfConfirms("bull") && macdOkBull;
+  const bearValid = volOk && bear >= minScore && bear > bull + minMargin && htfConfirms("bear") && macdOkBear;
 
   if (bullValid) {
     signal = "BUY"; confidence = bullConf;
@@ -399,34 +417,7 @@ function buildSignal(market, candles, htfCandles, livePrice) {
   };
 }
 
-// ── AI Analysis ────────────────────────────────────────────────
-async function fetchAIAnalysis(sig, tf) {
-  const prompt = `You are a senior trader specializing in forex and synthetic indices. Analyze this ${tf} signal.
 
-Symbol: ${sig.symbol} | Timeframe: ${tf}
-Signal: ${sig.signal} | Confluence: ${sig.confidence}%
-Price: ${sig.price} | Trend: ${sig.trend}
-HTF Trend: ${sig.htfTrend} | Market Structure: ${sig.marketStructure}
-${sig.liquiditySweep ? `Liquidity Sweep: ${sig.liquiditySweep.label}` : "No liquidity sweep"}
-RSI: ${sig.rsi} | MACD: ${sig.macdH > 0 ? "+" : ""}${sig.macdH} | ATR: ${sig.atr}
-EMA 9/21/50: ${sig.ema9} / ${sig.ema21} / ${sig.ema50}
-Bull: ${sig.bull}/${sig.MAX} | Bear: ${sig.bear}/${sig.MAX}
-PA Patterns: ${sig.paPatterns?.map(p => p.name).join(", ") || "None"}
-Factors: ${sig.factors.filter(f => f.side !== "neutral").map(f => f.label).join(" | ")}
-${sig.tp1 ? `TP1: ${sig.tp1} | TP2: ${sig.tp2} | SL: ${sig.sl} | R:R: ${sig.rr}` : "WAIT — no trade levels"}
-
-Respond ONLY with this exact JSON, no markdown, no backticks:
-{"verdict":"one strong sentence","edge":"strongest reason to take this trade","risk":"biggest threat","bias":"BULLISH|BEARISH|NEUTRAL","winProbability":<integer 40-85>,"action":"exact action right now"}`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
-  });
-  const data = await res.json();
-  const text = data.content?.find(b => b.type === "text")?.text || "{}";
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
-}
 
 // ── Utilities ──────────────────────────────────────────────────
 const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -461,7 +452,7 @@ const ConfBar = ({ value, signal }) => {
 };
 
 // ── Signal Card ────────────────────────────────────────────────
-function SignalCard({ item, tf, onAnalyze, aiData, aiLoading }) {
+function SignalCard({ item, tf }) {
   const [expanded, setExpanded] = useState(false);
   const [showPA,   setShowPA]   = useState(false);
   const borderColor = item.signal === "BUY" ? C.bull : item.signal === "SELL" ? C.bear : C.border;
@@ -576,31 +567,6 @@ function SignalCard({ item, tf, onAnalyze, aiData, aiLoading }) {
         </div>
       )}
 
-      {/* AI Analysis */}
-      {item.signal !== "WAIT" && (
-        <div style={{ marginTop: 10 }}>
-          {!aiData && !aiLoading && (
-            <button onClick={() => onAnalyze(item)} style={{ background: C.accentDim, border: `1px solid ${C.accent}44`, color: C.accent, borderRadius: 6, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", width: "100%" }}>
-              ✦ Get AI Analysis
-            </button>
-          )}
-          {aiLoading && <div style={{ color: C.sub, fontSize: 12, textAlign: "center", padding: 10 }}>Analyzing…</div>}
-          {aiData && (
-            <div style={{ background: C.surface, border: `1px solid ${C.accent}33`, borderRadius: 8, padding: 12, marginTop: 4 }}>
-              <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, marginBottom: 6 }}>✦ AI ANALYSIS — {tf}</div>
-              <div style={{ fontSize: 13, color: C.text, fontWeight: 600, marginBottom: 10, lineHeight: 1.4 }}>{aiData.verdict}</div>
-              {[{ l: "Edge", v: aiData.edge }, { l: "Risk", v: aiData.risk }, { l: "Action", v: aiData.action }].map(({ l, v }) => (
-                <div key={l} style={{ marginBottom: 6 }}>
-                  <span style={{ fontSize: 11, color: C.sub }}>{l}: </span>
-                  <span style={{ fontSize: 12, color: C.text }}>{v}</span>
-                </div>
-              ))}
-              <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: aiData.bias === "BULLISH" ? C.bullDim : aiData.bias === "BEARISH" ? C.bearDim : C.warnDim, color: aiData.bias === "BULLISH" ? C.bull : aiData.bias === "BEARISH" ? C.bear : C.warn }}>
-                  {aiData.bias}
-                </span>
-                <span style={{ fontSize: 11, color: C.sub }}>Win prob: <strong style={{ color: C.accent }}>{aiData.winProbability}%</strong></span>
-              </div>
             </div>
           )}
         </div>
@@ -614,8 +580,6 @@ export default function App() {
   const [tab,          setTab]          = useState("forex");
   const [tf,           setTf]           = useState("1h");
   const [signals,      setSignals]      = useState({});
-  const [aiMap,        setAiMap]        = useState({});
-  const [aiLoading,    setAiLoading]    = useState({});
   const [scanning,     setScanning]     = useState(false);
   const [lastScan,     setLastScan]     = useState(null);
   const [filterSignal, setFilterSignal] = useState("ALL");
@@ -670,7 +634,6 @@ export default function App() {
     });
 
     setSignals(newSignals);
-    setAiMap({});
     setLiveCount(live);
     setFetchErrors(errs);
 
@@ -697,16 +660,6 @@ export default function App() {
     runScan(newTf);
   };
 
-  const handleAnalyze = async item => {
-    setAiLoading(p => ({ ...p, [item.symbol]: true }));
-    try {
-      const result = await fetchAIAnalysis(item, tf);
-      setAiMap(p => ({ ...p, [item.symbol]: result }));
-    } catch {
-      setAiMap(p => ({ ...p, [item.symbol]: { verdict: "AI unavailable.", edge: "—", risk: "—", action: "—", bias: "NEUTRAL", winProbability: 50 } }));
-    }
-    setAiLoading(p => ({ ...p, [item.symbol]: false }));
-  };
 
   const currentList = tab === "forex" ? FOREX : SYNTHETICS;
   const mins = Math.floor(countdown / 60);
@@ -795,7 +748,7 @@ export default function App() {
           <div style={{ textAlign: "center", padding: 50, color: C.sub }}>No signals match this filter</div>
         )}
         {!scanning && visibleSignals.map(item => (
-          <SignalCard key={item.symbol} item={item} tf={tf} onAnalyze={handleAnalyze} aiData={aiMap[item.symbol]} aiLoading={aiLoading[item.symbol]} />
+          <SignalCard key={item.symbol} item={item} tf={tf} />
         ))}
       </div>
 

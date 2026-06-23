@@ -63,7 +63,7 @@ const SYNTHETICS = [
 ];
 
 // ── Deriv WebSocket ────────────────────────────────────────────
-function derivWS(request, timeoutMs = 20000) {
+function derivWS(request, timeoutMs = 25000) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${DERIV_APP_ID}`);
     const timer = setTimeout(() => { ws.close(); reject(new Error("Timeout")); }, timeoutMs);
@@ -432,6 +432,8 @@ Respond ONLY with this exact JSON, no markdown, no backticks:
 
 // ── Utilities ──────────────────────────────────────────────────
 const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+// ── Utilities ──────────────────────────────────────────────────
+const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 // ── UI Components ──────────────────────────────────────────────
 const SignalBadge = ({ signal }) => {
@@ -584,7 +586,7 @@ function SignalCard({ item, tf, onAnalyze, aiData, aiLoading }) {
           {!aiData && !aiLoading && (
             <button onClick={() => onAnalyze(item)} style={{ background: C.accentDim, border: `1px solid ${C.accent}44`, color: C.accent, borderRadius: 6, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", width: "100%" }}>
               ✦ Get AI Analysis
-              </button>
+            </button>
           )}
           {aiLoading && <div style={{ color: C.sub, fontSize: 12, textAlign: "center", padding: 10 }}>Analyzing…</div>}
           {aiData && (
@@ -632,11 +634,11 @@ export default function App() {
   const processMarket = useCallback(async (market, activeTf) => {
     const tfCfg = TIMEFRAMES[activeTf];
     try {
-      const [candles, htfCandles, livePrice] = await Promise.all([
-        fetchCandles(market.deriv, tfCfg.granularity, tfCfg.candles),
-        fetchCandles(market.deriv, tfCfg.htfGran, 100),
-        fetchLivePrice(market.deriv),
-      ]);
+      // Sequential fetches per market to avoid WS overload
+      const candles    = await fetchCandles(market.deriv, tfCfg.granularity, tfCfg.candles);
+      const htfCandles = await fetchCandles(market.deriv, tfCfg.htfGran, 100);
+      const livePrice  = await fetchLivePrice(market.deriv);
+
       return buildSignal(market, candles, htfCandles, livePrice);
     } catch (e) {
       return { symbol: market.symbol, error: e.message };
@@ -650,7 +652,14 @@ export default function App() {
     setCountdown(REFRESH_SECONDS);
 
     const allMarkets = [...FOREX, ...SYNTHETICS];
-    const results = await Promise.allSettled(allMarkets.map(m => processMarket(m, useTf)));
+    // Process in batches of 3 to avoid Deriv WS connection limits
+    const batchSize = 3;
+    const results = [];
+    for (let i = 0; i < allMarkets.length; i += batchSize) {
+      const batch = allMarkets.slice(i, i + batchSize);
+      const batchResults = await Promise.allSettled(batch.map(m => processMarket(m, useTf)));
+      results.push(...batchResults);
+    }
 
     const newSignals = {};
     const errs = [];
@@ -802,4 +811,4 @@ export default function App() {
       <style>{`* { box-sizing: border-box; } button { -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }`}</style>
     </div>
   );
- }
+                                                    }

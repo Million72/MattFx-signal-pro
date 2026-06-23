@@ -63,7 +63,7 @@ const SYNTHETICS = [
 ];
 
 // ── Deriv WebSocket ────────────────────────────────────────────
-function derivWS(request, timeoutMs = 25000) {
+function derivWS(request, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${DERIV_APP_ID}`);
     const timer = setTimeout(() => { ws.close(); reject(new Error("Timeout")); }, timeoutMs);
@@ -90,14 +90,12 @@ async function fetchCandles(derivSymbol, granularity, count = 250) {
     granularity,
     style:             "candles",
   });
-  return (d.candles || []).map(c => ({
+  const candles = (d.candles || []).map(c => ({
     open: +c.open, high: +c.high, low: +c.low, close: +c.close, time: c.epoch * 1000,
   }));
-}
-
-async function fetchLivePrice(derivSymbol) {
-  const d = await derivWS({ ticks: derivSymbol, subscribe: 0 }, 8000);
-  return d.tick?.quote ?? null;
+  // Last close is our live price — saves a separate WS call
+  const livePrice = candles.length ? candles[candles.length - 1].close : null;
+  return { candles, livePrice };
 }
 
 // ── Indicators ─────────────────────────────────────────────────
@@ -432,8 +430,6 @@ Respond ONLY with this exact JSON, no markdown, no backticks:
 
 // ── Utilities ──────────────────────────────────────────────────
 const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-// ── Utilities ──────────────────────────────────────────────────
-const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 // ── UI Components ──────────────────────────────────────────────
 const SignalBadge = ({ signal }) => {
@@ -634,11 +630,9 @@ export default function App() {
   const processMarket = useCallback(async (market, activeTf) => {
     const tfCfg = TIMEFRAMES[activeTf];
     try {
-      // Sequential fetches per market to avoid WS overload
-      const candles    = await fetchCandles(market.deriv, tfCfg.granularity, tfCfg.candles);
-      const htfCandles = await fetchCandles(market.deriv, tfCfg.htfGran, 100);
-      const livePrice  = await fetchLivePrice(market.deriv);
-
+      // 2 WS calls only: primary TF + HTF (live price taken from last candle close)
+      const { candles, livePrice } = await fetchCandles(market.deriv, tfCfg.granularity, tfCfg.candles);
+      const { candles: htfCandles } = await fetchCandles(market.deriv, tfCfg.htfGran, 100);
       return buildSignal(market, candles, htfCandles, livePrice);
     } catch (e) {
       return { symbol: market.symbol, error: e.message };
@@ -655,10 +649,12 @@ export default function App() {
     // Process in batches of 3 to avoid Deriv WS connection limits
     const batchSize = 3;
     const results = [];
+    const delay = ms => new Promise(r => setTimeout(r, ms));
     for (let i = 0; i < allMarkets.length; i += batchSize) {
       const batch = allMarkets.slice(i, i + batchSize);
       const batchResults = await Promise.allSettled(batch.map(m => processMarket(m, useTf)));
       results.push(...batchResults);
+      if (i + batchSize < allMarkets.length) await delay(600);
     }
 
     const newSignals = {};
@@ -811,4 +807,4 @@ export default function App() {
       <style>{`* { box-sizing: border-box; } button { -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }`}</style>
     </div>
   );
-                                                    }
+}

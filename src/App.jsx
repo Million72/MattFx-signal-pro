@@ -268,6 +268,204 @@ function priceActionPatterns(candles) {
   return pats;
 }
 
+
+// ── Chart Patterns (multi-candle) ─────────────────────────────
+function detectChartPatterns(candles) {
+  if (candles.length < 30) return [];
+  const patterns = [];
+  const len = candles.length;
+
+  // Helper: find local lows and highs using a window
+  const isLocalLow  = (i, w=3) => candles.slice(Math.max(0,i-w), i+w+1).every(c => c.low  >= candles[i].low);
+  const isLocalHigh = (i, w=3) => candles.slice(Math.max(0,i-w), i+w+1).every(c => c.high <= candles[i].high);
+
+  // Collect swing highs and lows from last 60 candles
+  const slice = candles.slice(-60);
+  const sLen  = slice.length;
+  const swingLows  = [];
+  const swingHighs = [];
+  for (let i = 3; i < sLen - 3; i++) {
+    if (isLocalLow(i))  swingLows.push({ i, price: slice[i].low,  candle: slice[i] });
+    if (isLocalHigh(i)) swingHighs.push({ i, price: slice[i].high, candle: slice[i] });
+  }
+
+  const priceTolerance = 0.015; // 1.5% tolerance for matching levels
+
+  // ── Double Bottom (W pattern) ────────────────────────────────
+  // Two lows at roughly same level, separated by a peak
+  if (swingLows.length >= 2) {
+    for (let a = 0; a < swingLows.length - 1; a++) {
+      for (let b = a + 1; b < swingLows.length; b++) {
+        const l1 = swingLows[a], l2 = swingLows[b];
+        const gap = l2.i - l1.i;
+        if (gap < 5) continue; // must be separated
+        const diff = Math.abs(l1.price - l2.price) / l1.price;
+        if (diff < priceTolerance) {
+          // Check there's a peak between them
+          const peakBetween = swingHighs.some(h => h.i > l1.i && h.i < l2.i);
+          if (peakBetween) {
+            const currentPrice = slice[sLen-1].close;
+            const neckline = swingHighs.filter(h => h.i > l1.i && h.i < l2.i).sort((a,b) => b.price - a.price)[0];
+            const breakout = neckline && currentPrice > neckline.price;
+            patterns.push({
+              name: breakout ? "Double Bottom — Breakout ✓" : "Double Bottom Forming",
+              side: "bull",
+              strength: breakout ? 4 : 2,
+              desc: `Two lows ~${l1.price.toFixed(2)}`
+            });
+            break;
+          }
+        }
+      }
+      if (patterns.some(p => p.name.includes("Double Bottom"))) break;
+    }
+  }
+
+  // ── Double Top (M pattern) ───────────────────────────────────
+  if (swingHighs.length >= 2) {
+    for (let a = 0; a < swingHighs.length - 1; a++) {
+      for (let b = a + 1; b < swingHighs.length; b++) {
+        const h1 = swingHighs[a], h2 = swingHighs[b];
+        const gap = h2.i - h1.i;
+        if (gap < 5) continue;
+        const diff = Math.abs(h1.price - h2.price) / h1.price;
+        if (diff < priceTolerance) {
+          const troughBetween = swingLows.some(l => l.i > h1.i && l.i < h2.i);
+          if (troughBetween) {
+            const currentPrice = slice[sLen-1].close;
+            const neckline = swingLows.filter(l => l.i > h1.i && l.i < h2.i).sort((a,b) => a.price - b.price)[0];
+            const breakout = neckline && currentPrice < neckline.price;
+            patterns.push({
+              name: breakout ? "Double Top — Breakdown ✓" : "Double Top Forming",
+              side: "bear",
+              strength: breakout ? 4 : 2,
+              desc: `Two highs ~${h1.price.toFixed(2)}`
+            });
+            break;
+          }
+        }
+      }
+      if (patterns.some(p => p.name.includes("Double Top"))) break;
+    }
+  }
+
+  // ── Head & Shoulders (bearish reversal) ─────────────────────
+  if (swingHighs.length >= 3) {
+    for (let i = 0; i < swingHighs.length - 2; i++) {
+      const left  = swingHighs[i];
+      const head  = swingHighs[i+1];
+      const right = swingHighs[i+2];
+      // Head must be highest, shoulders roughly equal
+      if (head.price > left.price && head.price > right.price) {
+        const shoulderDiff = Math.abs(left.price - right.price) / left.price;
+        if (shoulderDiff < priceTolerance * 2) {
+          // Neckline: lows between shoulders
+          const leftTrough  = swingLows.find(l => l.i > left.i  && l.i < head.i);
+          const rightTrough = swingLows.find(l => l.i > head.i  && l.i < right.i);
+          if (leftTrough && rightTrough) {
+            const neckline = (leftTrough.price + rightTrough.price) / 2;
+            const currentPrice = slice[sLen-1].close;
+            const broken = currentPrice < neckline;
+            patterns.push({
+              name: broken ? "Head & Shoulders — Neckline Broken ✓" : "Head & Shoulders Forming",
+              side: "bear",
+              strength: broken ? 5 : 3,
+              desc: `Head at ${head.price.toFixed(2)}, neckline ${neckline.toFixed(2)}`
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // ── Inverse Head & Shoulders (bullish reversal) ──────────────
+  if (swingLows.length >= 3) {
+    for (let i = 0; i < swingLows.length - 2; i++) {
+      const left  = swingLows[i];
+      const head  = swingLows[i+1];
+      const right = swingLows[i+2];
+      if (head.price < left.price && head.price < right.price) {
+        const shoulderDiff = Math.abs(left.price - right.price) / left.price;
+        if (shoulderDiff < priceTolerance * 2) {
+          const leftPeak  = swingHighs.find(h => h.i > left.i && h.i < head.i);
+          const rightPeak = swingHighs.find(h => h.i > head.i && h.i < right.i);
+          if (leftPeak && rightPeak) {
+            const neckline = (leftPeak.price + rightPeak.price) / 2;
+            const currentPrice = slice[sLen-1].close;
+            const broken = currentPrice > neckline;
+            patterns.push({
+              name: broken ? "Inv. Head & Shoulders — Breakout ✓" : "Inv. Head & Shoulders Forming",
+              side: "bull",
+              strength: broken ? 5 : 3,
+              desc: `Head at ${head.price.toFixed(2)}, neckline ${neckline.toFixed(2)}`
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // ── Rising Wedge (bearish) ───────────────────────────────────
+  // Higher highs AND higher lows but converging — bearish reversal
+  if (swingHighs.length >= 3 && swingLows.length >= 3) {
+    const recentHighs = swingHighs.slice(-3);
+    const recentLows  = swingLows.slice(-3);
+    const highsRising = recentHighs[2].price > recentHighs[1].price && recentHighs[1].price > recentHighs[0].price;
+    const lowsRising  = recentLows[2].price  > recentLows[1].price  && recentLows[1].price  > recentLows[0].price;
+    if (highsRising && lowsRising) {
+      // Converging: lows rising faster than highs
+      const highSlope = (recentHighs[2].price - recentHighs[0].price) / (recentHighs[2].i - recentHighs[0].i);
+      const lowSlope  = (recentLows[2].price  - recentLows[0].price)  / (recentLows[2].i  - recentLows[0].i);
+      if (lowSlope > highSlope * 0.8) {
+        patterns.push({ name: "Rising Wedge — Bearish", side: "bear", strength: 3, desc: "Converging highs & lows trending up" });
+      }
+    }
+  }
+
+  // ── Falling Wedge (bullish) ──────────────────────────────────
+  // Lower highs AND lower lows but converging — bullish reversal
+  if (swingHighs.length >= 3 && swingLows.length >= 3) {
+    const recentHighs = swingHighs.slice(-3);
+    const recentLows  = swingLows.slice(-3);
+    const highsFalling = recentHighs[2].price < recentHighs[1].price && recentHighs[1].price < recentHighs[0].price;
+    const lowsFalling  = recentLows[2].price  < recentLows[1].price  && recentLows[1].price  < recentLows[0].price;
+    if (highsFalling && lowsFalling) {
+      const highSlope = (recentHighs[0].price - recentHighs[2].price) / (recentHighs[2].i - recentHighs[0].i);
+      const lowSlope  = (recentLows[0].price  - recentLows[2].price)  / (recentLows[2].i  - recentLows[0].i);
+      if (highSlope > lowSlope * 0.8) {
+        patterns.push({ name: "Falling Wedge — Bullish", side: "bull", strength: 3, desc: "Converging highs & lows trending down" });
+      }
+    }
+  }
+
+  // ── Break of Structure (BOS) ─────────────────────────────────
+  // BOS Bull: price breaks above the most recent swing high
+  // BOS Bear: price breaks below the most recent swing low
+  if (swingHighs.length >= 1 && swingLows.length >= 1) {
+    const lastHigh  = swingHighs[swingHighs.length - 1];
+    const lastLow   = swingLows[swingLows.length - 1];
+    const currClose = slice[sLen - 1].close;
+    const currHigh  = slice[sLen - 1].high;
+    const currLow   = slice[sLen - 1].low;
+
+    if (currClose > lastHigh.price) {
+      patterns.push({
+        name: `BOS Bullish — broke ${lastHigh.price.toFixed(2)}`,
+        side: "bull", strength: 3,
+        desc: "Price closed above last swing high"
+      });
+    } else if (currClose < lastLow.price) {
+      patterns.push({
+        name: `BOS Bearish — broke ${lastLow.price.toFixed(2)}`,
+        side: "bear", strength: 3,
+        desc: "Price closed below last swing low"
+      });
+    }
+  }
+
+  return patterns;
+}
+
 // ── Core Signal Engine ─────────────────────────────────────────
 function buildSignal(market, candles, htfCandles, livePrice) {
   const { symbol, isJPY = false, isGold = false } = market;
@@ -288,7 +486,8 @@ function buildSignal(market, candles, htfCandles, livePrice) {
   const macdH  = macdHistogram(closes);
   const bb     = bollingerBands(closes);
   const ATR    = atrCalc(candles);
-  const pa     = priceActionPatterns(candles);
+  const pa      = priceActionPatterns(candles);
+  const chartPat = detectChartPatterns(candles);
   const sr     = supportResistance(candles);
   const ms     = marketStructure(candles);
   const sweep  = liquiditySweep(candles, dec);
@@ -369,8 +568,14 @@ function buildSignal(market, candles, htfCandles, livePrice) {
     else                          { factors.push({ label: `PA: ${pat.name}`, side: "neutral" }); }
   });
 
+  // 13. Chart patterns (high strength — double top/bottom, H&S, wedges, BOS)
+  chartPat.forEach(pat => {
+    if      (pat.side === "bull") { bull += pat.strength; factors.push({ label: `📊 ${pat.name}`, side: "bull" }); }
+    else if (pat.side === "bear") { bear += pat.strength; factors.push({ label: `📊 ${pat.name}`, side: "bear" }); }
+  });
+
   // ── Signal: requires score + MTF agreement ─────────────────
-  const MAX      = 25; // 3 HTF + 3 EMA + 1 price + 1 ema200 + 2 RSI + 2 MACD + 2 BB + 4 SR + 2 MS + 3 sweep + PA
+  const MAX      = 30; // added chart pattern scoring (up to 5pts) // 3 HTF + 3 EMA + 1 price + 1 ema200 + 2 RSI + 2 MACD + 2 BB + 4 SR + 2 MS + 3 sweep + PA
   const bullConf = Math.min(100, Math.round((bull / MAX) * 100));
   const bearConf = Math.min(100, Math.round((bear / MAX) * 100));
   const trend    = ema9 > ema21 ? "UP" : ema9 < ema21 ? "DOWN" : "FLAT";
@@ -413,7 +618,7 @@ function buildSignal(market, candles, htfCandles, livePrice) {
     marketStructure: ms, liquiditySweep: sweep, htfTrend: htf,
     ema9: +ema9.toFixed(dec), ema21: +ema21.toFixed(dec), ema50: +ema50.toFixed(dec),
     atr: ATR ? +ATR.toFixed(dec + 1) : null,
-    volOk, source: "live",
+    volOk, source: "live", chartPatterns: chartPat,
   };
 }
 
@@ -550,6 +755,27 @@ function SignalCard({ item, tf }) {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Chart Patterns */}
+      {item.chartPatterns?.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, marginBottom: 5 }}>📊 Chart Patterns</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {item.chartPatterns.map((p, i) => (
+              <div key={i} style={{
+                background: p.side === "bull" ? C.bullDim : C.bearDim,
+                border: `1px solid ${p.side === "bull" ? C.bull : C.bear}33`,
+                borderRadius: 6, padding: "6px 10px",
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: p.side === "bull" ? C.bull : C.bear }}>
+                  {p.name}
+                </div>
+                {p.desc && <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{p.desc}</div>}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

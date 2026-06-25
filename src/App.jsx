@@ -791,6 +791,9 @@ function SignalCard({ item, tf }) {
             </div>
           ))}
         </div>
+      )}
+
+  </div>
     </div>
   );
 }
@@ -980,4 +983,4 @@ export default function App() {
       <style>{`* { box-sizing: border-box; } button { -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }`}</style>
     </div>
   );
-        }
+}

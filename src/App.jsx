@@ -20,20 +20,17 @@ const C = {
   error:     "#FF6B6B",
 };
 
-// ── Timeframe config ───────────────────────────────────────────
-// Each TF has: granularity (seconds), higher TF for MTF confirmation, candle count
 const TIMEFRAMES = {
-  "1m":  { granularity: 60,    label: "1m",  htfGran: 300,   candles: 250 },
-  "5m":  { granularity: 300,   label: "5m",  htfGran: 3600,  candles: 250 },
-  "15m": { granularity: 900,   label: "15m", htfGran: 3600,  candles: 250 },
-  "1h":  { granularity: 3600,  label: "1h",  htfGran: 14400, candles: 250 },
-  "4h":  { granularity: 14400, label: "4h",  htfGran: 86400, candles: 250 },
+  "1m":  { granularity: 60,    htfGran: 300,   candles: 250 },
+  "5m":  { granularity: 300,   htfGran: 3600,  candles: 250 },
+  "15m": { granularity: 900,   htfGran: 3600,  candles: 250 },
+  "1h":  { granularity: 3600,  htfGran: 14400, candles: 250 },
+  "4h":  { granularity: 14400, htfGran: 86400, candles: 250 },
 };
 
 const REFRESH_SECONDS = 300;
-const DERIV_APP_ID    = "1089";
+const DERIV_APP_ID   = "1089";
 
-// ── Markets — ALL via Deriv WebSocket ──────────────────────────
 const FOREX = [
   { symbol: "XAUUSD", name: "Gold",    deriv: "frxXAUUSD", isJPY: false, isGold: true  },
   { symbol: "EURUSD", name: "EUR/USD", deriv: "frxEURUSD", isJPY: false, isGold: false },
@@ -83,17 +80,12 @@ function derivWS(request, timeoutMs = 30000) {
 
 async function fetchCandles(derivSymbol, granularity, count = 250) {
   const d = await derivWS({
-    ticks_history:     derivSymbol,
-    adjust_start_time: 1,
-    count,
-    end:               "latest",
-    granularity,
-    style:             "candles",
+    ticks_history: derivSymbol, adjust_start_time: 1,
+    count, end: "latest", granularity, style: "candles",
   });
   const candles = (d.candles || []).map(c => ({
     open: +c.open, high: +c.high, low: +c.low, close: +c.close, time: c.epoch * 1000,
   }));
-  // Last close is our live price — saves a separate WS call
   const livePrice = candles.length ? candles[candles.length - 1].close : null;
   return { candles, livePrice };
 }
@@ -123,20 +115,18 @@ function rsiCalc(closes, p = 14) {
 function macdHistogram(closes) {
   const e12 = ema(closes, 12), e26 = ema(closes, 26);
   if (!e12 || !e26) return 0;
-  const macdLine   = e12 - e26;
-  const macdSeries = [];
+  const macdLine = e12 - e26;
+  const series = [];
   for (let i = 26; i <= closes.length; i++) {
-    const s = closes.slice(0, i);
-    const a = ema(s, 12), b = ema(s, 26);
-    if (a && b) macdSeries.push(a - b);
+    const a = ema(closes.slice(0, i), 12), b = ema(closes.slice(0, i), 26);
+    if (a && b) series.push(a - b);
   }
-  const signal = ema(macdSeries, 9) ?? macdLine;
-  return macdLine - signal;
+  return macdLine - (ema(series, 9) ?? macdLine);
 }
 
 function bollingerBands(closes, p = 20) {
   if (closes.length < p) return {};
-  const s   = closes.slice(-p);
+  const s = closes.slice(-p);
   const mid = s.reduce((a, b) => a + b, 0) / p;
   const std = Math.sqrt(s.map(x => (x - mid) ** 2).reduce((a, b) => a + b, 0) / p);
   return { upper: mid + 2 * std, lower: mid - 2 * std, mid };
@@ -150,21 +140,16 @@ function atrCalc(candles, p = 14) {
   return trs.slice(-p).reduce((a, b) => a + b, 0) / p;
 }
 
-// ── HTF Trend (for MTF confirmation) ──────────────────────────
-// Returns "BULL", "BEAR", or "NEUTRAL" based on EMA stack on higher TF candles
 function htfTrend(htfCandles) {
   if (!htfCandles || htfCandles.length < 50) return "NEUTRAL";
   const closes = htfCandles.map(c => c.close);
-  const e9  = ema(closes, 9);
-  const e21 = ema(closes, 21);
-  const e50 = ema(closes, 50);
+  const e9 = ema(closes, 9), e21 = ema(closes, 21), e50 = ema(closes, 50);
   if (!e9 || !e21 || !e50) return "NEUTRAL";
   if (e9 > e21 && e21 > e50) return "BULL";
   if (e9 < e21 && e21 < e50) return "BEAR";
   return "NEUTRAL";
 }
 
-// ── Market Structure ───────────────────────────────────────────
 function marketStructure(candles) {
   if (candles.length < 10) return "NEUTRAL";
   const r = candles.slice(-10);
@@ -180,28 +165,26 @@ function marketStructure(candles) {
   return "NEUTRAL";
 }
 
-// ── Liquidity Sweep ────────────────────────────────────────────
 function liquiditySweep(candles, dec) {
   if (candles.length < 20) return null;
-  const lookback   = candles.slice(-20, -1);
-  const last       = candles[candles.length - 1];
-  const recentHigh = Math.max(...lookback.map(c => c.high));
-  const recentLow  = Math.min(...lookback.map(c => c.low));
-  if (last.low < recentLow   && last.close > recentLow)
-    return { side: "bull", label: `Liq. Sweep below ${recentLow.toFixed(dec)} → Bullish reversal` };
-  if (last.high > recentHigh && last.close < recentHigh)
-    return { side: "bear", label: `Liq. Sweep above ${recentHigh.toFixed(dec)} → Bearish reversal` };
+  const look = candles.slice(-20, -1);
+  const last = candles[candles.length - 1];
+  const hi = Math.max(...look.map(c => c.high));
+  const lo = Math.min(...look.map(c => c.low));
+  if (last.low < lo && last.close > lo)
+    return { side: "bull", label: `Liq. Sweep below ${lo.toFixed(dec)} → Bullish` };
+  if (last.high > hi && last.close < hi)
+    return { side: "bear", label: `Liq. Sweep above ${hi.toFixed(dec)} → Bearish` };
   return null;
 }
 
-// ── Support & Resistance ───────────────────────────────────────
 function supportResistance(candles) {
   if (candles.length < 10) return {};
-  const slice      = candles.slice(-20);
-  const resistance = Math.max(...slice.map(c => c.high));
-  const support    = Math.min(...slice.map(c => c.low));
-  const price      = candles[candles.length - 1].close;
-  const rng        = resistance - support || 1;
+  const s = candles.slice(-20);
+  const resistance = Math.max(...s.map(c => c.high));
+  const support    = Math.min(...s.map(c => c.low));
+  const price = candles[candles.length - 1].close;
+  const rng   = resistance - support || 1;
   return {
     support, resistance,
     nearSupport:    (price - support)    < rng * 0.08,
@@ -209,21 +192,18 @@ function supportResistance(candles) {
   };
 }
 
-// ── ATR Volatility Filter ──────────────────────────────────────
 function isVolatilityHealthy(candles, atrValue) {
   if (!atrValue || candles.length < 20) return true;
-  const avgRange = candles.slice(-20).reduce((a, c) => a + (c.high - c.low), 0) / 20;
-  return atrValue >= avgRange * 0.3;
+  const avg = candles.slice(-20).reduce((a, c) => a + (c.high - c.low), 0) / 20;
+  return atrValue >= avg * 0.3;
 }
 
-// ── Price Action Patterns ──────────────────────────────────────
 function priceActionPatterns(candles) {
   if (candles.length < 3) return [];
   const pats = [];
   const c0 = candles[candles.length - 1];
   const c1 = candles[candles.length - 2];
   const c2 = candles[candles.length - 3];
-
   const body   = c => Math.abs(c.close - c.open);
   const rng    = c => (c.high - c.low) || 0.00001;
   const isBull = c => c.close > c.open;
@@ -240,7 +220,7 @@ function priceActionPatterns(candles) {
   if (upWick(c0) > body(c0) * 2 && dnWick(c0) < body(c0) * 0.5 && body(c0) < rng(c0) * 0.4)
     pats.push({ name: "Shooting Star", side: "bear", strength: 2 });
   if (body(c0) < rng(c0) * 0.1)
-    pats.push({ name: "Doji — Indecision", side: "neutral", strength: 1 });
+    pats.push({ name: "Doji", side: "neutral", strength: 1 });
   if (c0.high < c1.high && c0.low > c1.low)
     pats.push({ name: "Inside Bar", side: "neutral", strength: 1 });
   if (isBull(c2) && isBull(c1) && isBull(c0) && c1.close > c2.close && c0.close > c1.close)
@@ -252,232 +232,148 @@ function priceActionPatterns(candles) {
   if (isBull(c2) && body(c1) < rng(c1) * 0.3 && isBear(c0) && c0.close < (c2.open + c2.close) / 2)
     pats.push({ name: "Evening Star", side: "bear", strength: 3 });
 
-  // Conflict resolution — remove contradictory patterns
+  const hasStrong = pats.some(p => p.strength >= 3);
+  if (hasStrong) return pats.filter(p => p.name !== "Doji" && p.name !== "Inside Bar");
   const hasBull = pats.some(p => p.side === "bull" && p.strength >= 2);
   const hasBear = pats.some(p => p.side === "bear" && p.strength >= 2);
-  // If strong bull AND strong bear patterns both detected, keep only stronger side
   if (hasBull && hasBear) {
-    const bullStr = pats.filter(p => p.side === "bull").reduce((a, p) => a + p.strength, 0);
-    const bearStr = pats.filter(p => p.side === "bear").reduce((a, p) => a + p.strength, 0);
-    if (bullStr > bearStr) return pats.filter(p => p.side !== "bear" || p.strength < 2);
-    if (bearStr > bullStr) return pats.filter(p => p.side !== "bull" || p.strength < 2);
+    const bs = pats.filter(p => p.side === "bull").reduce((a, p) => a + p.strength, 0);
+    const rs = pats.filter(p => p.side === "bear").reduce((a, p) => a + p.strength, 0);
+    if (bs > rs) return pats.filter(p => p.side !== "bear" || p.strength < 2);
+    if (rs > bs) return pats.filter(p => p.side !== "bull" || p.strength < 2);
   }
-  // Remove Doji if strong directional pattern also detected
-  const hasStrong = pats.some(p => p.strength >= 3);
-  if (hasStrong) return pats.filter(p => p.name !== "Doji — Indecision" && p.name !== "Inside Bar");
   return pats;
 }
 
-
-// ── Chart Patterns (multi-candle) ─────────────────────────────
-function detectChartPatterns(candles) {
+function detectChartPatterns(candles, dec) {
   if (candles.length < 30) return [];
-  const patterns = [];
-  const len = candles.length;
-
-  // Helper: find local lows and highs using a window
-  const isLocalLow  = (i, w=3) => candles.slice(Math.max(0,i-w), i+w+1).every(c => c.low  >= candles[i].low);
-  const isLocalHigh = (i, w=3) => candles.slice(Math.max(0,i-w), i+w+1).every(c => c.high <= candles[i].high);
-
-  // Collect swing highs and lows from last 60 candles
+  const pats = [];
   const slice = candles.slice(-60);
-  const sLen  = slice.length;
+  const n = slice.length;
+  const tol = 0.015;
+
+  const isLow  = (i, w=3) => slice.slice(Math.max(0,i-w), i+w+1).every(c => c.low  >= slice[i].low);
+  const isHigh = (i, w=3) => slice.slice(Math.max(0,i-w), i+w+1).every(c => c.high <= slice[i].high);
+
   const swingLows  = [];
   const swingHighs = [];
-  for (let i = 3; i < sLen - 3; i++) {
-    if (isLocalLow(i))  swingLows.push({ i, price: slice[i].low,  candle: slice[i] });
-    if (isLocalHigh(i)) swingHighs.push({ i, price: slice[i].high, candle: slice[i] });
+  for (let i = 3; i < n - 3; i++) {
+    if (isLow(i))  swingLows.push({ i, price: slice[i].low });
+    if (isHigh(i)) swingHighs.push({ i, price: slice[i].high });
   }
 
-  const priceTolerance = 0.015; // 1.5% tolerance for matching levels
-
-  // ── Double Bottom (W pattern) ────────────────────────────────
-  // Two lows at roughly same level, separated by a peak
-  if (swingLows.length >= 2) {
-    for (let a = 0; a < swingLows.length - 1; a++) {
-      for (let b = a + 1; b < swingLows.length; b++) {
-        const l1 = swingLows[a], l2 = swingLows[b];
-        const gap = l2.i - l1.i;
-        if (gap < 5) continue; // must be separated
-        const diff = Math.abs(l1.price - l2.price) / l1.price;
-        if (diff < priceTolerance) {
-          // Check there's a peak between them
-          const peakBetween = swingHighs.some(h => h.i > l1.i && h.i < l2.i);
-          if (peakBetween) {
-            const currentPrice = slice[sLen-1].close;
-            const neckline = swingHighs.filter(h => h.i > l1.i && h.i < l2.i).sort((a,b) => b.price - a.price)[0];
-            const breakout = neckline && currentPrice > neckline.price;
-            patterns.push({
-              name: breakout ? "Double Bottom — Breakout ✓" : "Double Bottom Forming",
-              side: "bull",
-              strength: breakout ? 4 : 2,
-              desc: `Two lows ~${l1.price.toFixed(2)}`
-            });
-            break;
-          }
+  // Double Bottom
+  for (let a = 0; a < swingLows.length - 1; a++) {
+    for (let b = a + 1; b < swingLows.length; b++) {
+      const l1 = swingLows[a], l2 = swingLows[b];
+      if (l2.i - l1.i < 5) continue;
+      if (Math.abs(l1.price - l2.price) / l1.price < tol) {
+        const peakBetween = swingHighs.some(h => h.i > l1.i && h.i < l2.i);
+        if (peakBetween) {
+          const curr = slice[n-1].close;
+          const neck = swingHighs.filter(h => h.i > l1.i && h.i < l2.i).sort((a,b) => b.price - a.price)[0];
+          const broke = neck && curr > neck.price;
+          pats.push({ name: broke ? "Double Bottom — Breakout ✓" : "Double Bottom Forming", side: "bull", strength: broke ? 4 : 2, desc: `Lows ~${l1.price.toFixed(dec)}` });
+          break;
         }
       }
-      if (patterns.some(p => p.name.includes("Double Bottom"))) break;
     }
+    if (pats.some(p => p.name.includes("Double Bottom"))) break;
   }
 
-  // ── Double Top (M pattern) ───────────────────────────────────
-  if (swingHighs.length >= 2) {
-    for (let a = 0; a < swingHighs.length - 1; a++) {
-      for (let b = a + 1; b < swingHighs.length; b++) {
-        const h1 = swingHighs[a], h2 = swingHighs[b];
-        const gap = h2.i - h1.i;
-        if (gap < 5) continue;
-        const diff = Math.abs(h1.price - h2.price) / h1.price;
-        if (diff < priceTolerance) {
-          const troughBetween = swingLows.some(l => l.i > h1.i && l.i < h2.i);
-          if (troughBetween) {
-            const currentPrice = slice[sLen-1].close;
-            const neckline = swingLows.filter(l => l.i > h1.i && l.i < h2.i).sort((a,b) => a.price - b.price)[0];
-            const breakout = neckline && currentPrice < neckline.price;
-            patterns.push({
-              name: breakout ? "Double Top — Breakdown ✓" : "Double Top Forming",
-              side: "bear",
-              strength: breakout ? 4 : 2,
-              desc: `Two highs ~${h1.price.toFixed(2)}`
-            });
-            break;
-          }
+  // Double Top
+  for (let a = 0; a < swingHighs.length - 1; a++) {
+    for (let b = a + 1; b < swingHighs.length; b++) {
+      const h1 = swingHighs[a], h2 = swingHighs[b];
+      if (h2.i - h1.i < 5) continue;
+      if (Math.abs(h1.price - h2.price) / h1.price < tol) {
+        const troughBetween = swingLows.some(l => l.i > h1.i && l.i < h2.i);
+        if (troughBetween) {
+          const curr = slice[n-1].close;
+          const neck = swingLows.filter(l => l.i > h1.i && l.i < h2.i).sort((a,b) => a.price - b.price)[0];
+          const broke = neck && curr < neck.price;
+          pats.push({ name: broke ? "Double Top — Breakdown ✓" : "Double Top Forming", side: "bear", strength: broke ? 4 : 2, desc: `Highs ~${h1.price.toFixed(dec)}` });
+          break;
         }
       }
-      if (patterns.some(p => p.name.includes("Double Top"))) break;
     }
+    if (pats.some(p => p.name.includes("Double Top"))) break;
   }
 
-  // ── Head & Shoulders (bearish reversal) ─────────────────────
-  if (swingHighs.length >= 3) {
-    for (let i = 0; i < swingHighs.length - 2; i++) {
-      const left  = swingHighs[i];
-      const head  = swingHighs[i+1];
-      const right = swingHighs[i+2];
-      // Head must be highest, shoulders roughly equal
-      if (head.price > left.price && head.price > right.price) {
-        const shoulderDiff = Math.abs(left.price - right.price) / left.price;
-        if (shoulderDiff < priceTolerance * 2) {
-          // Neckline: lows between shoulders
-          const leftTrough  = swingLows.find(l => l.i > left.i  && l.i < head.i);
-          const rightTrough = swingLows.find(l => l.i > head.i  && l.i < right.i);
-          if (leftTrough && rightTrough) {
-            const neckline = (leftTrough.price + rightTrough.price) / 2;
-            const currentPrice = slice[sLen-1].close;
-            const broken = currentPrice < neckline;
-            patterns.push({
-              name: broken ? "Head & Shoulders — Neckline Broken ✓" : "Head & Shoulders Forming",
-              side: "bear",
-              strength: broken ? 5 : 3,
-              desc: `Head at ${head.price.toFixed(2)}, neckline ${neckline.toFixed(2)}`
-            });
-          }
-        }
+  // Head & Shoulders
+  for (let i = 0; i < swingHighs.length - 2; i++) {
+    const L = swingHighs[i], H = swingHighs[i+1], R = swingHighs[i+2];
+    if (H.price > L.price && H.price > R.price && Math.abs(L.price - R.price) / L.price < tol * 2) {
+      const lt = swingLows.find(l => l.i > L.i && l.i < H.i);
+      const rt = swingLows.find(l => l.i > H.i && l.i < R.i);
+      if (lt && rt) {
+        const neck = (lt.price + rt.price) / 2;
+        const broke = slice[n-1].close < neck;
+        pats.push({ name: broke ? "H&S — Neckline Broken ✓" : "Head & Shoulders Forming", side: "bear", strength: broke ? 5 : 3, desc: `Head ${H.price.toFixed(dec)}, neck ${neck.toFixed(dec)}` });
       }
     }
   }
 
-  // ── Inverse Head & Shoulders (bullish reversal) ──────────────
-  if (swingLows.length >= 3) {
-    for (let i = 0; i < swingLows.length - 2; i++) {
-      const left  = swingLows[i];
-      const head  = swingLows[i+1];
-      const right = swingLows[i+2];
-      if (head.price < left.price && head.price < right.price) {
-        const shoulderDiff = Math.abs(left.price - right.price) / left.price;
-        if (shoulderDiff < priceTolerance * 2) {
-          const leftPeak  = swingHighs.find(h => h.i > left.i && h.i < head.i);
-          const rightPeak = swingHighs.find(h => h.i > head.i && h.i < right.i);
-          if (leftPeak && rightPeak) {
-            const neckline = (leftPeak.price + rightPeak.price) / 2;
-            const currentPrice = slice[sLen-1].close;
-            const broken = currentPrice > neckline;
-            patterns.push({
-              name: broken ? "Inv. Head & Shoulders — Breakout ✓" : "Inv. Head & Shoulders Forming",
-              side: "bull",
-              strength: broken ? 5 : 3,
-              desc: `Head at ${head.price.toFixed(2)}, neckline ${neckline.toFixed(2)}`
-            });
-          }
-        }
+  // Inverse Head & Shoulders
+  for (let i = 0; i < swingLows.length - 2; i++) {
+    const L = swingLows[i], H = swingLows[i+1], R = swingLows[i+2];
+    if (H.price < L.price && H.price < R.price && Math.abs(L.price - R.price) / L.price < tol * 2) {
+      const lp = swingHighs.find(h => h.i > L.i && h.i < H.i);
+      const rp = swingHighs.find(h => h.i > H.i && h.i < R.i);
+      if (lp && rp) {
+        const neck = (lp.price + rp.price) / 2;
+        const broke = slice[n-1].close > neck;
+        pats.push({ name: broke ? "Inv H&S — Breakout ✓" : "Inv Head & Shoulders Forming", side: "bull", strength: broke ? 5 : 3, desc: `Head ${H.price.toFixed(dec)}, neck ${neck.toFixed(dec)}` });
       }
     }
   }
 
-  // ── Rising Wedge (bearish) ───────────────────────────────────
-  // Higher highs AND higher lows but converging — bearish reversal
+  // Rising Wedge (bearish)
   if (swingHighs.length >= 3 && swingLows.length >= 3) {
-    const recentHighs = swingHighs.slice(-3);
-    const recentLows  = swingLows.slice(-3);
-    const highsRising = recentHighs[2].price > recentHighs[1].price && recentHighs[1].price > recentHighs[0].price;
-    const lowsRising  = recentLows[2].price  > recentLows[1].price  && recentLows[1].price  > recentLows[0].price;
-    if (highsRising && lowsRising) {
-      // Converging: lows rising faster than highs
-      const highSlope = (recentHighs[2].price - recentHighs[0].price) / (recentHighs[2].i - recentHighs[0].i);
-      const lowSlope  = (recentLows[2].price  - recentLows[0].price)  / (recentLows[2].i  - recentLows[0].i);
-      if (lowSlope > highSlope * 0.8) {
-        patterns.push({ name: "Rising Wedge — Bearish", side: "bear", strength: 3, desc: "Converging highs & lows trending up" });
-      }
+    const rh = swingHighs.slice(-3), rl = swingLows.slice(-3);
+    if (rh[2].price > rh[1].price && rh[1].price > rh[0].price &&
+        rl[2].price > rl[1].price && rl[1].price > rl[0].price) {
+      const hs = (rh[2].price - rh[0].price) / (rh[2].i - rh[0].i);
+      const ls = (rl[2].price - rl[0].price) / (rl[2].i - rl[0].i);
+      if (ls > hs * 0.8) pats.push({ name: "Rising Wedge — Bearish", side: "bear", strength: 3, desc: "Converging highs & lows trending up" });
     }
   }
 
-  // ── Falling Wedge (bullish) ──────────────────────────────────
-  // Lower highs AND lower lows but converging — bullish reversal
+  // Falling Wedge (bullish)
   if (swingHighs.length >= 3 && swingLows.length >= 3) {
-    const recentHighs = swingHighs.slice(-3);
-    const recentLows  = swingLows.slice(-3);
-    const highsFalling = recentHighs[2].price < recentHighs[1].price && recentHighs[1].price < recentHighs[0].price;
-    const lowsFalling  = recentLows[2].price  < recentLows[1].price  && recentLows[1].price  < recentLows[0].price;
-    if (highsFalling && lowsFalling) {
-      const highSlope = (recentHighs[0].price - recentHighs[2].price) / (recentHighs[2].i - recentHighs[0].i);
-      const lowSlope  = (recentLows[0].price  - recentLows[2].price)  / (recentLows[2].i  - recentLows[0].i);
-      if (highSlope > lowSlope * 0.8) {
-        patterns.push({ name: "Falling Wedge — Bullish", side: "bull", strength: 3, desc: "Converging highs & lows trending down" });
-      }
+    const rh = swingHighs.slice(-3), rl = swingLows.slice(-3);
+    if (rh[2].price < rh[1].price && rh[1].price < rh[0].price &&
+        rl[2].price < rl[1].price && rl[1].price < rl[0].price) {
+      const hs = (rh[0].price - rh[2].price) / (rh[2].i - rh[0].i);
+      const ls = (rl[0].price - rl[2].price) / (rl[2].i - rl[0].i);
+      if (hs > ls * 0.8) pats.push({ name: "Falling Wedge — Bullish", side: "bull", strength: 3, desc: "Converging highs & lows trending down" });
     }
   }
 
-  // ── Break of Structure (BOS) ─────────────────────────────────
-  // BOS Bull: price breaks above the most recent swing high
-  // BOS Bear: price breaks below the most recent swing low
-  if (swingHighs.length >= 1 && swingLows.length >= 1) {
-    const lastHigh  = swingHighs[swingHighs.length - 1];
-    const lastLow   = swingLows[swingLows.length - 1];
-    const currClose = slice[sLen - 1].close;
-    const currHigh  = slice[sLen - 1].high;
-    const currLow   = slice[sLen - 1].low;
-
-    if (currClose > lastHigh.price) {
-      patterns.push({
-        name: `BOS Bullish — broke ${lastHigh.price.toFixed(2)}`,
-        side: "bull", strength: 3,
-        desc: "Price closed above last swing high"
-      });
-    } else if (currClose < lastLow.price) {
-      patterns.push({
-        name: `BOS Bearish — broke ${lastLow.price.toFixed(2)}`,
-        side: "bear", strength: 3,
-        desc: "Price closed below last swing low"
-      });
-    }
+  // BOS
+  if (swingHighs.length && swingLows.length) {
+    const lastHigh = swingHighs[swingHighs.length - 1];
+    const lastLow  = swingLows[swingLows.length - 1];
+    const curr = slice[n-1].close;
+    if (curr > lastHigh.price)
+      pats.push({ name: `BOS Bullish — broke ${lastHigh.price.toFixed(dec)}`, side: "bull", strength: 3, desc: "Closed above last swing high" });
+    else if (curr < lastLow.price)
+      pats.push({ name: `BOS Bearish — broke ${lastLow.price.toFixed(dec)}`, side: "bear", strength: 3, desc: "Closed below last swing low" });
   }
 
-  return patterns;
+  return pats;
 }
 
-// ── Core Signal Engine ─────────────────────────────────────────
+// ── Signal Engine ──────────────────────────────────────────────
 function buildSignal(market, candles, htfCandles, livePrice) {
   const { symbol, isJPY = false, isGold = false } = market;
   const isSyn = SYNTHETICS.some(s => s.symbol === symbol);
-  // Dynamic decimals: high-price synthetics (Jump 10 ~98k, Boom/Crash ~6k+) use 2dp
   const lastClose = candles.length ? candles[candles.length-1].close : 0;
   const dec = isGold ? 2 : isJPY ? 3 : isSyn ? (lastClose > 999 ? 2 : 3) : 5;
 
   const closes = candles.map(c => c.close);
   const price  = livePrice ?? closes[closes.length - 1];
 
-  // ── Indicators (primary TF) ────────────────────────────────
   const ema9   = ema(closes, 9)   ?? price;
   const ema21  = ema(closes, 21)  ?? price;
   const ema50  = ema(closes, 50)  ?? price;
@@ -486,111 +382,87 @@ function buildSignal(market, candles, htfCandles, livePrice) {
   const macdH  = macdHistogram(closes);
   const bb     = bollingerBands(closes);
   const ATR    = atrCalc(candles);
-  const pa      = priceActionPatterns(candles);
-  const chartPat = detectChartPatterns(candles);
+  const pa     = priceActionPatterns(candles);
+  const cp     = detectChartPatterns(candles, dec);
   const sr     = supportResistance(candles);
   const ms     = marketStructure(candles);
   const sweep  = liquiditySweep(candles, dec);
   const volOk  = isVolatilityHealthy(candles, ATR);
+  const htf    = htfTrend(htfCandles);
+  const htfOk  = (side) => htf === "NEUTRAL" || (side === "bull" && htf === "BULL") || (side === "bear" && htf === "BEAR");
 
-  // ── MTF: Higher Timeframe trend ────────────────────────────
-  const htf        = htfTrend(htfCandles);
-  const htfConfirms = (side) => htf === "NEUTRAL" || (side === "bull" && htf === "BULL") || (side === "bear" && htf === "BEAR");
-
-  // ── Scoring ────────────────────────────────────────────────
   let bull = 0, bear = 0;
   const factors = [];
-
   const add = (label, side, pts) => {
     if (side === "bull") bull += pts;
     else if (side === "bear") bear += pts;
     factors.push({ label, side });
   };
 
-  // 1. Volatility filter
-  if (!volOk) add("⚠ Low volatility — reduced signal quality", "neutral", 0);
+  if (!volOk) add("Low volatility — reduced quality", "neutral", 0);
+  if (htf === "BULL")    add("HTF Trend: BULLISH",  "bull", 3);
+  else if (htf === "BEAR") add("HTF Trend: BEARISH", "bear", 3);
+  else                   add("HTF Trend: NEUTRAL",   "neutral", 0);
 
-  // 2. MTF Higher TF confirmation (3pts — strong weight)
-  if      (htf === "BULL") add(`HTF Trend: BULLISH (higher TF EMA stack up)`,   "bull", 3);
-  else if (htf === "BEAR") add(`HTF Trend: BEARISH (higher TF EMA stack down)`,  "bear", 3);
-  else                     add(`HTF Trend: NEUTRAL — trade with caution`,         "neutral", 0);
+  if (ema9 > ema21 && ema21 > ema50)      add("EMA Stack Bullish 9>21>50", "bull", 3);
+  else if (ema9 < ema21 && ema21 < ema50) add("EMA Stack Bearish 9<21<50", "bear", 3);
+  else                                     add("EMA Stack Mixed",           "neutral", 0);
 
-  // 3. EMA Stack primary TF (3pts)
-  if      (ema9 > ema21 && ema21 > ema50) add("EMA Stack Bullish: 9 > 21 > 50", "bull", 3);
-  else if (ema9 < ema21 && ema21 < ema50) add("EMA Stack Bearish: 9 < 21 < 50", "bear", 3);
-  else                                     add("EMA Stack Mixed — no clear trend", "neutral", 0);
-
-  // 4. Price vs EMA21 (1pt)
   if (price > ema21) add("Price above EMA21", "bull", 1);
   else               add("Price below EMA21", "bear", 1);
 
-  // 5. EMA200 long-term bias (1pt)
   if (ema200) {
     if (price > ema200) add("Above EMA200 — long-term bullish", "bull", 1);
     else                add("Below EMA200 — long-term bearish", "bear", 1);
   }
 
-  // 6. RSI (2pts)
   if      (RSI > 55 && RSI < 70) add(`RSI ${RSI.toFixed(1)} — Bullish momentum`,   "bull", 2);
   else if (RSI < 45 && RSI > 30) add(`RSI ${RSI.toFixed(1)} — Bearish momentum`,   "bear", 2);
-  else if (RSI >= 70)             add(`RSI ${RSI.toFixed(1)} — Overbought caution`, "bear", 1);
-  else if (RSI <= 30)             add(`RSI ${RSI.toFixed(1)} — Oversold bounce`,    "bull", 1);
-  else                            add(`RSI ${RSI.toFixed(1)} — Neutral zone`,        "neutral", 0);
+  else if (RSI >= 70)             add(`RSI ${RSI.toFixed(1)} — Overbought`,          "bear", 1);
+  else if (RSI <= 30)             add(`RSI ${RSI.toFixed(1)} — Oversold`,            "bull", 1);
+  else                            add(`RSI ${RSI.toFixed(1)} — Neutral`,             "neutral", 0);
 
-  // 7. MACD Histogram (2pts)
-  if      (macdH > 0) add(`MACD Histogram positive`, "bull", 2);
-  else if (macdH < 0) add(`MACD Histogram negative`, "bear", 2);
+  if (macdH > 0) add("MACD Histogram positive", "bull", 2);
+  else if (macdH < 0) add("MACD Histogram negative", "bear", 2);
 
-  // 8. Bollinger Bands (2pts)
-  if      (bb.lower && price < bb.lower) add("Price below Lower BB — oversold",   "bull", 2);
-  else if (bb.upper && price > bb.upper) add("Price above Upper BB — overbought", "bear", 2);
+  if (bb.lower && price < bb.lower)      add("Below Lower Bollinger Band", "bull", 2);
+  else if (bb.upper && price > bb.upper) add("Above Upper Bollinger Band", "bear", 2);
   else if (bb.mid) {
-    if (price > bb.mid) add("Price above BB midline", "bull", 1);
-    else                add("Price below BB midline", "bear", 1);
+    if (price > bb.mid) add("Above BB midline", "bull", 1);
+    else                add("Below BB midline", "bear", 1);
   }
 
-  // 9. Support & Resistance (2pts each)
   if (sr.nearSupport)    add(`Near Support ${sr.support?.toFixed(dec)}`,    "bull", 2);
   if (sr.nearResistance) add(`Near Resistance ${sr.resistance?.toFixed(dec)}`, "bear", 2);
 
-  // 10. Market Structure (2pts)
-  if      (ms === "BULLISH") add("Market Structure: Higher Highs / Higher Lows", "bull", 2);
-  else if (ms === "BEARISH") add("Market Structure: Lower Highs / Lower Lows",   "bear", 2);
-  else                       add("Market Structure: Ranging / Choppy",            "neutral", 0);
+  if (ms === "BULLISH")      add("Market Structure: HH/HL", "bull", 2);
+  else if (ms === "BEARISH") add("Market Structure: LH/LL", "bear", 2);
+  else                       add("Market Structure: Ranging", "neutral", 0);
 
-  // 11. Liquidity Sweep (3pts)
   if (sweep) add(sweep.label, sweep.side, 3);
 
-  // 12. Price Action patterns (variable)
-  pa.forEach(pat => {
-    if      (pat.side === "bull") { bull += pat.strength; factors.push({ label: `PA: ${pat.name}`, side: "bull" }); }
-    else if (pat.side === "bear") { bear += pat.strength; factors.push({ label: `PA: ${pat.name}`, side: "bear" }); }
-    else                          { factors.push({ label: `PA: ${pat.name}`, side: "neutral" }); }
+  pa.forEach(p => {
+    if      (p.side === "bull") { bull += p.strength; factors.push({ label: `PA: ${p.name}`, side: "bull" }); }
+    else if (p.side === "bear") { bear += p.strength; factors.push({ label: `PA: ${p.name}`, side: "bear" }); }
+    else                        { factors.push({ label: `PA: ${p.name}`, side: "neutral" }); }
   });
 
-  // 13. Chart patterns (high strength — double top/bottom, H&S, wedges, BOS)
-  chartPat.forEach(pat => {
-    if      (pat.side === "bull") { bull += pat.strength; factors.push({ label: `📊 ${pat.name}`, side: "bull" }); }
-    else if (pat.side === "bear") { bear += pat.strength; factors.push({ label: `📊 ${pat.name}`, side: "bear" }); }
+  cp.forEach(p => {
+    if      (p.side === "bull") { bull += p.strength; factors.push({ label: `📊 ${p.name}`, side: "bull" }); }
+    else if (p.side === "bear") { bear += p.strength; factors.push({ label: `📊 ${p.name}`, side: "bear" }); }
   });
 
-  // ── Signal: requires score + MTF agreement ─────────────────
-  const MAX      = 30; // added chart pattern scoring (up to 5pts) // 3 HTF + 3 EMA + 1 price + 1 ema200 + 2 RSI + 2 MACD + 2 BB + 4 SR + 2 MS + 3 sweep + PA
+  const MAX = 30;
   const bullConf = Math.min(100, Math.round((bull / MAX) * 100));
   const bearConf = Math.min(100, Math.round((bear / MAX) * 100));
   const trend    = ema9 > ema21 ? "UP" : ema9 < ema21 ? "DOWN" : "FLAT";
-
-  const minScore  = 10;
-  const minMargin = 3;
+  const minScore = 10, minMargin = 3;
+  const macdOkBull = macdH >= 0 || bull - bear >= 5;
+  const macdOkBear = macdH <= 0 || bear - bull >= 5;
+  const bullValid  = volOk && bull >= minScore && bull > bear + minMargin && htfOk("bull") && macdOkBull;
+  const bearValid  = volOk && bear >= minScore && bear > bull + minMargin && htfOk("bear") && macdOkBear;
 
   let signal, confidence, tp1, tp2, sl;
-
-  // Extra filter: MACD must not strongly contradict the signal
-  const macdOkBull = macdH >= 0 || bull - bear >= 5; // allow bearish MACD only if score dominance is high
-  const macdOkBear = macdH <= 0 || bear - bull >= 5;
-  const bullValid = volOk && bull >= minScore && bull > bear + minMargin && htfConfirms("bull") && macdOkBull;
-  const bearValid = volOk && bear >= minScore && bear > bull + minMargin && htfConfirms("bear") && macdOkBear;
-
   if (bullValid) {
     signal = "BUY"; confidence = bullConf;
     sl  = +(price - ATR * 1.5).toFixed(dec);
@@ -613,35 +485,40 @@ function buildSignal(market, candles, htfCandles, livePrice) {
   return {
     symbol, price: +price.toFixed(dec), signal, confidence,
     tp1, tp2, sl, rr, pips, factors, bull, bear, MAX,
-    timestamp: new Date(), rsi: +RSI.toFixed(1),
-    macdH: +macdH.toFixed(6), trend, paPatterns: pa,
+    timestamp: new Date(), rsi: +RSI.toFixed(1), macdH: +macdH.toFixed(6),
+    trend, paPatterns: pa, chartPatterns: cp,
     marketStructure: ms, liquiditySweep: sweep, htfTrend: htf,
     ema9: +ema9.toFixed(dec), ema21: +ema21.toFixed(dec), ema50: +ema50.toFixed(dec),
-    atr: ATR ? +ATR.toFixed(dec + 1) : null,
-    volOk, source: "live", chartPatterns: chartPat,
+    atr: ATR ? +ATR.toFixed(dec + 1) : null, volOk, source: "live",
   };
 }
-
-
 
 // ── Utilities ──────────────────────────────────────────────────
 const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 // ── UI Components ──────────────────────────────────────────────
-const SignalBadge = ({ signal }) => {
+function SignalBadge({ signal }) {
   const cfg = {
     BUY:  { bg: C.bullDim, color: C.bull, label: "▲ BUY"  },
     SELL: { bg: C.bearDim, color: C.bear, label: "▼ SELL" },
     WAIT: { bg: C.warnDim, color: C.warn, label: "◆ WAIT" },
   }[signal] || {};
-  return <span style={{ background: cfg.bg, color: cfg.color, padding: "3px 10px", borderRadius: 4, fontSize: 12, fontWeight: 700, letterSpacing: 1 }}>{cfg.label}</span>;
-};
+  return (
+    <span style={{ background: cfg.bg, color: cfg.color, padding: "3px 10px", borderRadius: 4, fontSize: 12, fontWeight: 700, letterSpacing: 1 }}>
+      {cfg.label}
+    </span>
+  );
+}
 
-const Pill = ({ label, color, bg }) => (
-  <span style={{ fontSize: 10, color, fontWeight: 600, background: bg || C.surface, padding: "2px 7px", borderRadius: 10 }}>{label}</span>
-);
+function Pill({ label, color }) {
+  return (
+    <span style={{ fontSize: 10, color, fontWeight: 600, background: C.surface, padding: "2px 7px", borderRadius: 10 }}>
+      {label}
+    </span>
+  );
+}
 
-const ConfBar = ({ value, signal }) => {
+function ConfBar({ value, signal }) {
   const color = signal === "BUY" ? C.bull : signal === "SELL" ? C.bear : C.warn;
   return (
     <div style={{ marginTop: 8 }}>
@@ -654,12 +531,13 @@ const ConfBar = ({ value, signal }) => {
       </div>
     </div>
   );
-};
+}
 
 // ── Signal Card ────────────────────────────────────────────────
 function SignalCard({ item, tf }) {
   const [expanded, setExpanded] = useState(false);
   const [showPA,   setShowPA]   = useState(false);
+  const [showCP,   setShowCP]   = useState(false);
   const borderColor = item.signal === "BUY" ? C.bull : item.signal === "SELL" ? C.bear : C.border;
 
   if (item.error) {
@@ -674,14 +552,13 @@ function SignalCard({ item, tf }) {
     );
   }
 
-  const trendColor  = item.trend === "UP" ? C.bull : item.trend === "DOWN" ? C.bear : C.sub;
-  const htfColor    = item.htfTrend === "BULL" ? C.bull : item.htfTrend === "BEAR" ? C.bear : C.muted;
-  const msColor     = item.marketStructure === "BULLISH" ? C.bull : item.marketStructure === "BEARISH" ? C.bear : C.muted;
+  const trendColor = item.trend === "UP" ? C.bull : item.trend === "DOWN" ? C.bear : C.sub;
+  const htfColor   = item.htfTrend === "BULL" ? C.bull : item.htfTrend === "BEAR" ? C.bear : C.muted;
+  const msColor    = item.marketStructure === "BULLISH" ? C.bull : item.marketStructure === "BEARISH" ? C.bear : C.muted;
 
   return (
     <div style={{ background: C.card, border: `1px solid ${borderColor}22`, borderLeft: `3px solid ${borderColor}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
 
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -704,14 +581,12 @@ function SignalCard({ item, tf }) {
         </div>
       </div>
 
-      {/* Score bar */}
       <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
         <div style={{ flex: 1, background: C.bullDim, borderRadius: 4, padding: "3px 8px", fontSize: 11, color: C.bull, fontWeight: 700, textAlign: "center" }}>▲ {item.bull} bull</div>
         <div style={{ flex: 1, background: C.bearDim, borderRadius: 4, padding: "3px 8px", fontSize: 11, color: C.bear, fontWeight: 700, textAlign: "center" }}>▼ {item.bear} bear</div>
         <div style={{ background: C.surface, borderRadius: 4, padding: "3px 8px", fontSize: 11, color: C.muted, textAlign: "center" }}>/{item.MAX}</div>
       </div>
 
-      {/* TP/SL */}
       {item.tp1 && (
         <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
           {[{ l: "TP1", v: item.tp1, c: C.bull }, { l: "TP2", v: item.tp2, c: C.accent }, { l: "SL", v: item.sl, c: C.bear }, { l: "PIPS", v: item.pips, c: C.warn }].map(({ l, v, c }) => (
@@ -725,7 +600,6 @@ function SignalCard({ item, tf }) {
 
       <ConfBar value={item.confidence} signal={item.signal} />
 
-      {/* Quick stats */}
       <div style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, color: C.muted }}>RSI: <span style={{ color: item.rsi > 70 ? C.bear : item.rsi < 30 ? C.bull : C.sub, fontWeight: 700 }}>{item.rsi}</span></span>
         <span style={{ fontSize: 11, color: C.muted }}>ATR: <span style={{ color: C.sub, fontWeight: 700 }}>{item.atr ?? "—"}</span></span>
@@ -733,14 +607,12 @@ function SignalCard({ item, tf }) {
         {!item.volOk && <span style={{ fontSize: 11, color: C.warn, fontWeight: 600 }}>⚠ Low vol</span>}
       </div>
 
-      {/* Liquidity Sweep */}
       {item.liquiditySweep && (
         <div style={{ marginTop: 8, background: item.liquiditySweep.side === "bull" ? C.bullDim : C.bearDim, borderRadius: 6, padding: "6px 10px", fontSize: 11, color: item.liquiditySweep.side === "bull" ? C.bull : C.bear, fontWeight: 600 }}>
           ⚡ {item.liquiditySweep.label}
         </div>
       )}
 
-      {/* PA Patterns */}
       {item.paPatterns?.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <button onClick={() => setShowPA(p => !p)} style={{ background: "none", border: "none", color: C.gold, fontSize: 12, cursor: "pointer", padding: 0 }}>
@@ -758,28 +630,24 @@ function SignalCard({ item, tf }) {
         </div>
       )}
 
-      {/* Chart Patterns */}
       {item.chartPatterns?.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 11, color: C.accent, fontWeight: 700, marginBottom: 5 }}>📊 Chart Patterns</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            {item.chartPatterns.map((p, i) => (
-              <div key={i} style={{
-                background: p.side === "bull" ? C.bullDim : C.bearDim,
-                border: `1px solid ${p.side === "bull" ? C.bull : C.bear}33`,
-                borderRadius: 6, padding: "6px 10px",
-              }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: p.side === "bull" ? C.bull : C.bear }}>
-                  {p.name}
+          <button onClick={() => setShowCP(p => !p)} style={{ background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0 }}>
+            {showCP ? "▲" : "▼"} 📊 Chart Patterns ({item.chartPatterns.length})
+          </button>
+          {showCP && (
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
+              {item.chartPatterns.map((p, i) => (
+                <div key={i} style={{ background: p.side === "bull" ? C.bullDim : C.bearDim, border: `1px solid ${p.side === "bull" ? C.bull : C.bear}33`, borderRadius: 6, padding: "6px 10px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: p.side === "bull" ? C.bull : C.bear }}>{p.name}</div>
+                  {p.desc && <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{p.desc}</div>}
                 </div>
-                {p.desc && <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{p.desc}</div>}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* All factors */}
       <button onClick={() => setExpanded(e => !e)} style={{ marginTop: 8, background: "none", border: "none", color: C.accent, fontSize: 12, cursor: "pointer", padding: 0 }}>
         {expanded ? "▲ Hide" : "▼ Show"} all factors ({item.factors.length})
       </button>
@@ -793,7 +661,7 @@ function SignalCard({ item, tf }) {
         </div>
       )}
 
-  </div>
+    </div>
     </div>
   );
 }
@@ -815,11 +683,10 @@ export default function App() {
   tfRef.current  = tf;
 
   const processMarket = useCallback(async (market, activeTf) => {
-    const tfCfg = TIMEFRAMES[activeTf];
+    const cfg = TIMEFRAMES[activeTf];
     try {
-      // 2 WS calls only: primary TF + HTF (live price taken from last candle close)
-      const { candles, livePrice } = await fetchCandles(market.deriv, tfCfg.granularity, tfCfg.candles);
-      const { candles: htfCandles } = await fetchCandles(market.deriv, tfCfg.htfGran, 100);
+      const { candles, livePrice } = await fetchCandles(market.deriv, cfg.granularity, cfg.candles);
+      const { candles: htfCandles } = await fetchCandles(market.deriv, cfg.htfGran, 100);
       return buildSignal(market, candles, htfCandles, livePrice);
     } catch (e) {
       return { symbol: market.symbol, error: e.message };
@@ -832,24 +699,21 @@ export default function App() {
     countRef.current = REFRESH_SECONDS;
     setCountdown(REFRESH_SECONDS);
 
-    const allMarkets = [...FOREX, ...SYNTHETICS];
-    // Process in batches of 3 to avoid Deriv WS connection limits
-    const batchSize = 3;
+    const all = [...FOREX, ...SYNTHETICS];
     const results = [];
     const delay = ms => new Promise(r => setTimeout(r, ms));
-    for (let i = 0; i < allMarkets.length; i += batchSize) {
-      const batch = allMarkets.slice(i, i + batchSize);
-      const batchResults = await Promise.allSettled(batch.map(m => processMarket(m, useTf)));
-      results.push(...batchResults);
-      if (i + batchSize < allMarkets.length) await delay(600);
+    for (let i = 0; i < all.length; i += 3) {
+      const batch = all.slice(i, i + 3);
+      const res = await Promise.allSettled(batch.map(m => processMarket(m, useTf)));
+      results.push(...res);
+      if (i + 3 < all.length) await delay(600);
     }
 
     const newSignals = {};
     const errs = [];
     let live = 0;
-
     results.forEach((r, i) => {
-      const m   = allMarkets[i];
+      const m   = all[i];
       const val = r.status === "fulfilled" ? r.value : { symbol: m.symbol, error: r.reason?.message || "Error" };
       newSignals[m.symbol] = val;
       if (val.error) errs.push(m.symbol);
@@ -866,7 +730,7 @@ export default function App() {
     setScanning(false);
   }, [processMarket]);
 
-  useEffect(() => { runScan(tf); }, []);
+  useEffect(() => { runScan("1h"); }, []);
 
   useEffect(() => {
     const tick = setInterval(() => {
@@ -882,7 +746,6 @@ export default function App() {
     setSignals({});
     runScan(newTf);
   };
-
 
   const currentList = tab === "forex" ? FOREX : SYNTHETICS;
   const mins = Math.floor(countdown / 60);
@@ -902,13 +765,12 @@ export default function App() {
   return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "'Inter', system-ui, sans-serif", color: C.text, maxWidth: 480, margin: "0 auto" }}>
 
-      {/* Header */}
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "12px 16px", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 17, fontWeight: 900 }}><span style={{ color: C.gold }}>◈</span> MT5 Signal Pro</div>
             <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>
-              {lastScan ? `${fmtTime(lastScan)} · next ${countdownStr}` : "Connecting to Deriv…"}
+              {lastScan ? `${fmtTime(lastScan)} · next ${countdownStr}` : "Connecting…"}
               {liveCount > 0 && <span style={{ color: C.bull, marginLeft: 6 }}>● {liveCount} live</span>}
               {fetchErrors.length > 0 && <span style={{ color: C.error, marginLeft: 6 }}>⚠ {fetchErrors.length} err</span>}
             </div>
@@ -918,7 +780,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* Timeframe selector */}
         <div style={{ display: "flex", gap: 5, marginTop: 10 }}>
           {Object.keys(TIMEFRAMES).map(t => (
             <button key={t} onClick={() => handleTfChange(t)} style={{ flex: 1, background: tf === t ? C.accent : C.card, color: tf === t ? "#000" : C.sub, border: `1px solid ${tf === t ? C.accent : C.border}`, borderRadius: 6, padding: "5px 0", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
@@ -927,7 +788,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* Stats */}
         {stats.total > 0 && (
           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
             {[{ l: "LIVE", v: stats.total, c: C.sub }, { l: "BUY", v: stats.buys, c: C.bull }, { l: "SELL", v: stats.sells, c: C.bear }, { l: "WAIT", v: stats.waits, c: C.warn }].map(({ l, v, c }) => (
@@ -940,7 +800,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Tabs */}
       <div style={{ display: "flex", background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 16px" }}>
         {["forex", "synthetic"].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ background: "none", border: "none", borderBottom: tab === t ? `2px solid ${C.accent}` : "2px solid transparent", color: tab === t ? C.accent : C.sub, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5 }}>
@@ -949,7 +808,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* Filter pills */}
       <div style={{ display: "flex", gap: 6, padding: "10px 16px" }}>
         {["ALL", "BUY", "SELL", "WAIT"].map(f => (
           <button key={f} onClick={() => setFilterSignal(f)} style={{ flex: 1, background: filterSignal === f ? C.accent : C.card, color: filterSignal === f ? "#000" : C.sub, border: `1px solid ${filterSignal === f ? C.accent : C.border}`, borderRadius: 20, padding: "5px 0", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
@@ -958,13 +816,12 @@ export default function App() {
         ))}
       </div>
 
-      {/* Cards */}
       <div style={{ padding: "0 16px 80px" }}>
         {scanning && (
           <div style={{ textAlign: "center", padding: 50, color: C.sub }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>◈</div>
             <div style={{ fontSize: 14 }}>Scanning {tf} + HTF candles…</div>
-            <div style={{ fontSize: 11, marginTop: 6, color: C.muted }}>250 candles · MTF confirmation · Deriv WebSocket</div>
+            <div style={{ fontSize: 11, marginTop: 6, color: C.muted }}>250 candles · MTF · Deriv WebSocket</div>
           </div>
         )}
         {!scanning && visibleSignals.length === 0 && (
@@ -975,7 +832,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* Footer */}
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: C.surface, borderTop: `1px solid ${C.border}`, padding: "8px 16px", textAlign: "center", fontSize: 10, color: C.muted }}>
         Educational only · Trading involves risk · Use proper risk management
       </div>
@@ -983,4 +839,4 @@ export default function App() {
       <style>{`* { box-sizing: border-box; } button { -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }`}</style>
     </div>
   );
-}
+                         }

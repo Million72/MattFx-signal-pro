@@ -59,7 +59,7 @@ const SYNTHETICS = [
   { symbol: "Crash 500",      name: "C500",  deriv: "CRASH500",  isJPY: false, isGold: false },
 ];
 
-// ── Deriv WebSocket ────────────────────────────────────────────
+// -- Deriv WebSocket --
 function derivWS(request, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${DERIV_APP_ID}`);
@@ -90,7 +90,7 @@ async function fetchCandles(derivSymbol, granularity, count = 250) {
   return { candles, livePrice };
 }
 
-// ── Indicators ─────────────────────────────────────────────────
+// -- Indicators --
 function ema(prices, p) {
   if (prices.length < p) return null;
   const k = 2 / (p + 1);
@@ -172,9 +172,9 @@ function liquiditySweep(candles, dec) {
   const hi = Math.max(...look.map(c => c.high));
   const lo = Math.min(...look.map(c => c.low));
   if (last.low < lo && last.close > lo)
-    return { side: "bull", label: `Liq. Sweep below ${lo.toFixed(dec)} → Bullish` };
+    return { side: "bull", label: `Liq. Sweep below ${lo.toFixed(dec)} => Bullish` };
   if (last.high > hi && last.close < hi)
-    return { side: "bear", label: `Liq. Sweep above ${hi.toFixed(dec)} → Bearish` };
+    return { side: "bear", label: `Liq. Sweep above ${hi.toFixed(dec)} => Bearish` };
   return null;
 }
 
@@ -364,7 +364,7 @@ function detectChartPatterns(candles, dec) {
   return pats;
 }
 
-// ── Signal Engine ──────────────────────────────────────────────
+// -- Signal Engine --
 function buildSignal(market, candles, htfCandles, livePrice) {
   const { symbol, isJPY = false, isGold = false } = market;
   const isSyn = SYNTHETICS.some(s => s.symbol === symbol);
@@ -493,10 +493,10 @@ function buildSignal(market, candles, htfCandles, livePrice) {
   };
 }
 
-// ── Utilities ──────────────────────────────────────────────────
+// -- Utilities --
 const fmtTime = d => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-// ── UI Components ──────────────────────────────────────────────
+// -- UI Components --
 function SignalBadge({ signal }) {
   const cfg = {
     BUY:  { bg: C.bullDim, color: C.bull, label: "▲ BUY"  },
@@ -533,7 +533,7 @@ function ConfBar({ value, signal }) {
   );
 }
 
-// ── Signal Card ────────────────────────────────────────────────
+// -- Signal Card --
 function SignalCard({ item, tf }) {
   const [expanded, setExpanded] = useState(false);
   const [showPA,   setShowPA]   = useState(false);
@@ -666,7 +666,7 @@ function SignalCard({ item, tf }) {
   );
 }
 
-// ── Main App ───────────────────────────────────────────────────
+// -- Main App --
 export default function App() {
   const [tab,          setTab]          = useState("forex");
   const [tf,           setTf]           = useState("1h");
@@ -839,4 +839,4 @@ export default function App() {
       <style>{`* { box-sizing: border-box; } button { -webkit-tap-highlight-color: transparent; } ::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 2px; }`}</style>
     </div>
   );
-                         }
+        }

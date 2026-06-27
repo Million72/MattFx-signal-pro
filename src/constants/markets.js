@@ -20,8 +20,4 @@ export const SYNTHETICS = [
   { symbol: "1HZ10V",         name: "1Hz10", deriv: "1HZ10V",    isJPY: false, isGold: false },
   { symbol: "Step Index",     name: "Step",  deriv: "stpRNG",    isJPY: false, isGold: false },
   { symbol: "Jump 10",        name: "Jmp10", deriv: "JD10",      isJPY: false, isGold: false },
-  { symbol: "Boom 300",       name: "B300",  deriv: "BOOM300N",  isJPY: false, isGold: false },
-  { symbol: "Boom 500",       name: "B500",  deriv: "BOOM500",   isJPY: false, isGold: false },
-  { symbol: "Crash 300",      name: "C300",  deriv: "CRASH300N", isJPY: false, isGold: false },
-  { symbol: "Crash 500",      name: "C500",  deriv: "CRASH500",  isJPY: false, isGold: false },
 ];

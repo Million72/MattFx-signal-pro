@@ -20,10 +20,10 @@ export const SYNTHETICS = [
   { symbol: "Volatility 10 (1s)",  name: "1Hz10", deriv: "1HZ10V"    },
   { symbol: "Step Index",     name: "Step",  deriv: "stpRNG"    },
   { symbol: "Jump 10",        name: "Jmp10", deriv: "JD10"      },
-  { symbol: "Boom 300",       name: "B300",  deriv: "BOOM300N"  },
-  { symbol: "Boom 500",       name: "B500",  deriv: "BOOM500"   },
-  { symbol: "Crash 300",      name: "C300",  deriv: "CRASH300N" },
-  { symbol: "Crash 500",      name: "C500",  deriv: "CRASH500"  },
+  //{ symbol: "Boom 300",       name: "B300",  deriv: "BOOM300N"  },
+  //{ symbol: "Boom 500",       name: "B500",  deriv: "BOOM500"   },
+  //{ symbol: "Crash 300",      name: "C300",  deriv: "CRASH300N" },
+  //{ symbol: "Crash 500",      name: "C500",  deriv: "CRASH500"  },
 
   // --- Newly added ---
   { symbol: "Volatility 5",   name: "V5",    deriv: "R_5"       },
@@ -41,9 +41,9 @@ export const SYNTHETICS = [
   { symbol: "Volatility 100 (1s)", name: "1Hz100", deriv: "1HZ100V" },
   { symbol: "Volatility 150 (1s)", name: "1Hz150", deriv: "1HZ150V" },
 
-  { symbol: "Boom 600",   name: "B600",   deriv: "BOOM600"   },
-  { symbol: "Boom 1000",  name: "B1000",  deriv: "BOOM1000"  },
-  { symbol: "Crash 600",  name: "C600",   deriv: "CRASH600"  },
-  { symbol: "Crash 1000", name: "C1000",  deriv: "CRASH1000" },
+  //{ symbol: "Boom 600",   name: "B600",   deriv: "BOOM600"   },
+  //{ symbol: "Boom 1000",  name: "B1000",  deriv: "BOOM1000"  },
+  //{ symbol: "Crash 600",  name: "C600",   deriv: "CRASH600"  },
+  //{ symbol: "Crash 1000", name: "C1000",  deriv: "CRASH1000" },
 ];
     

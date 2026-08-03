@@ -27,9 +27,9 @@ export const SYNTHETICS = [
 
   // --- Newly added ---
   { symbol: "Volatility 5",   name: "V5",    deriv: "R_5"       },
-  { symbol: "Volatility 15",  name: "V15",   deriv: "R_15"      },
-  { symbol: "Volatility 30",  name: "V30",   deriv: "R_30"      },
-  { symbol: "Volatility 90",  name: "V90",   deriv: "R_90"      },
+  //{ symbol: "Volatility 15",  name: "V15",   deriv: "R_15"      },
+  //{ symbol: "Volatility 30",  name: "V30",   deriv: "R_30"      },
+  //{ symbol: "Volatility 90",  name: "V90",   deriv: "R_90"      },
 
   { symbol: "Volatility 5 (1s)",   name: "1Hz5",   deriv: "1HZ5V"   },
   { symbol: "Volatility 15 (1s)",  name: "1Hz15",  deriv: "1HZ15V"  },

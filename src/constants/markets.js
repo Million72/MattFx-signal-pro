@@ -37,7 +37,7 @@ export const SYNTHETICS = [
   { symbol: "Volatility 30 (1s)",  name: "1Hz30",  deriv: "1HZ30V"  },
   { symbol: "Volatility 50 (1s)",  name: "1Hz50",  deriv: "1HZ50V"  },
   { symbol: "Volatility 75 (1s)",  name: "1Hz75",  deriv: "1HZ75V"  },
-  { symbol: "Volatility 90 (1s)",  name: "1Hz90",  deriv: "1HZ90V"  },
+  //{ symbol: "Volatility 90 (1s)",  name: "1Hz90",  deriv: "1HZ90V"  },
   { symbol: "Volatility 100 (1s)", name: "1Hz100", deriv: "1HZ100V" },
   { symbol: "Volatility 150 (1s)", name: "1Hz150", deriv: "1HZ150V" },
 
